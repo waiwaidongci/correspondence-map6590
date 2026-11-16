@@ -34,9 +34,23 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 ## 实体、输入与页面
 
-五个核心实体ContingencyStudy、Category、CellCount、CorrespondenceRun、InterpretationNote贯穿表/model/schema/service/route/API/store/UI。六页为研究折页、列联计数、分析配置、坐标与诊断、解释审阅、研究留痕。CorrespondenceMap、InertiaSummary、RunTable跨页复用，另有Diagnostics及共享Table/Badge/Notice/Empty。
+五个核心实体ContingencyStudy、Category、CellCount、CorrespondenceRun、InterpretationNote贯穿表/model/schema/service/route/API/store/UI；区间研究另设IntervalStudy、IntervalCategory、IntervalCellBound、IntervalRun四表，完全不改动上述实体与历史运行。七页为研究折页、列联计数、分析配置、坐标与诊断、解释审阅、研究留痕、区间惯量。CorrespondenceMap、InertiaSummary、RunTable跨页复用，另有Diagnostics及共享Table/Badge/Notice/Empty。
 
 导入2–12行×2–12列非负整数矩阵，每格≤1000000；行与列分别按code唯一，数据库cell(row_id,column_id)唯一且count≥0。未知维度、重复类别、负数、非整数、非有限、总量为零拒绝；最大总N144000000。每格校订是替换并审计，不把重复提交当追加。缺失格在内部表构造时规范为0，导入矩阵必须完整。分类标签是合成机构级汇总，不含个人身份数据。UI接受矩阵JSON与类别标签，不直接解析CSV。
+
+## 计数区间与惯量上下界
+
+尚未核清的格子不必一次填死成确定计数。第07页“区间惯量”为每格填整数下限/上限，类别上填已核实的行合计与列合计；原精确计数研究原样保留，两种研究互不改写。数据表为interval_studies、interval_categories、interval_cell_bounds、interval_runs，导入同样受2–12行列、每格0..1000000、总N≤144000000限制。
+
+求解前先做整数可行性检查，除逐行/逐列合计外还用最大流最小割检查联合容量：即使行合计之和等于列合计之和，只要某行集合能送达的列集合容量不足，就判无解并给出可达行/列、割容量、剩余需求与缺口，而不是只报“合计不相等”。可行时对全部可行整数表求总惯量 I(X)=Σ X_ij²/(R_i C_j)−1 的上下界：
+
+- 单元段混合整数模型：整数格在[p,p+1]上只能取p或p+1，w=x²可由割线精确表示，故该模型对整数是**精确**的，不是松弛；宽度和不大时（Σ(upper−lower)≤3200）用它同时求最小与最大，HiGHS 判定 optimal 才称精确极值。
+- 备用路径：最小方向用切线外逼近整数规划（对偶界为已证下界），最大方向用自适应割线段松弛（对偶界为已证上界）；两者都配合2×2换位局部搜索找可行表。
+- 时间上限（5–60秒，默认20）由页面配置，worker 实算。超时**降级为“未证实”**：页面展示已证范围（下界、上界）与达到界值的可行计数表，并明确标注未证实，绝不把可行值冒充极值。每张界值表都可下载CSV复核。
+- 每次结果保存状态exact/unproven/infeasible、证明界、可行表与冲突明细；返回的上下界始终满足 0≤已证下界≤最小可行值≤最大可行值≤已证上界。
+- 零边际行/列由边际约束强制为0，与对应分析的零边际剔除口径一致；有效行列各至少2的要求仍由后续精确分析承担。
+
+demo研究“秋季导览内核定计数区间”4×5、N900，上下限来自秋季表的±扰动，seed时即算出一份已证结果；原有精确计数分析、运行与导出照常可用。
 
 ## 对应分析与诊断口径
 
@@ -57,6 +71,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 | 层 | 技术 |
 |---|---|
 | 前端 | React18.3 / TypeScript5.7 / Vite6.4.6 / Nginx1.27 |
+| 区间求解 | SciPy1.15 HiGHS MILP/LP + 最大流最小割 |
 | API | Python3.11 / FastAPI / SQLAlchemy2 / Pydantic |
 | 计算 | NumPy2.2.1 / SciPy1.15 |
 | 数据/队列 | PostgreSQL16 / Redis7 / Celery5.4 + Kombu5.4.2 |
@@ -83,10 +98,10 @@ npm run dev
 
 结构为backend/src/{routes,controllers,services,models,schemas,middlewares,utils,constants,config}、backend/scripts/seed_demo.py、backend/migrations/和frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}。metadata首次建表，migrations记录结构，生产增量迁移需另行规划。请求ID和全局错误两个中间件；审计登录/导入/校订/运行/审阅；CSV公式前缀转义。
 
-共享枚举：backend/src/constants/enums.py中的Role/RunStatus/NoteStatus/Axis，frontend/src/constants/enums.ts对应角色/运行/解释/点集标签；用于鉴权、服务/schema、Badge/Layout/各页面。70个职责源文件，不计__init__及配置。源码不放截图、日志和测试报告；独立测试与真实截图在批次根test-artifacts/gb-0018，TESTING.md列实测与已知差异。
+共享枚举：backend/src/constants/enums.py中的Role/RunStatus/NoteStatus/Axis，frontend/src/constants/enums.ts对应角色/运行/解释/点集标签；用于鉴权、服务/schema、Badge/Layout/各页面。80个职责源文件，不计__init__及配置。源码不放截图、日志和测试报告；独立测试与真实截图在批次根test-artifacts/gb-0018，TESTING.md列实测与已知差异。
 
 ## 范围与License
 
-数据是合成汇总，不证明真实访客偏好或因果效果。稀疏渐近p不可靠，未提供精确检验/Monte Carlo替代；残差未作多格显著性控制。未做生产压测或外部导览验证。Google字体需联网，离线浏览器回退。收尾docker compose down -v --remove-orphans清理本栈演示卷。
+数据是合成汇总，不证明真实访客偏好或因果效果。稀疏渐近p不可靠，未提供精确检验/Monte Carlo替代；残差未作多格显著性控制。区间惯量上下界只约束在给定逐格区间与核实合计下的全部整数表，界值外推不代表区间本身正确；超时结果只作已证范围与可行例子，不作精确极值。未做生产压测或外部导览验证。Google字体需联网，离线浏览器回退。收尾docker compose down -v --remove-orphans清理本栈演示卷。
 
 MIT，见LICENSE。

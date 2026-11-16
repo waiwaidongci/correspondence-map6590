@@ -6,6 +6,7 @@ from src.utils.security import hash_password
 from src.services.catalog import table_data
 from src.services.ca import correspondence
 from src.services.fingerprint import fingerprint
+from src.services.interval_solver import solve_interval
 
 def seed():
  Base.metadata.create_all(engine)
@@ -28,5 +29,36 @@ def seed():
    db.commit()
   if not db.scalar(select(CorrespondenceRun).where(CorrespondenceRun.name=='秋季导览结构初稿')):
    study=db.scalar(select(ContingencyStudy).where(ContingencyStudy.name==scenarios[0][0]));meta,rows,cols,cells,table=table_data(db,study.id);result=correspondence(table,rows,cols,2);result['fingerprint']=fingerprint(meta,rows,cols,cells,2);admin=db.scalar(select(User).where(User.role=='admin'));run=CorrespondenceRun(study_id=study.id,name='秋季导览结构初稿',axes=2,status='succeeded',result=result,creator_id=admin.id);db.add(run);db.flush();db.add(InterpretationNote(run_id=run.id,name='行轮廓结构与导览小样草案',category_ids=[p['id'] for p in result['row_points'][:2]],interpretation='先读取同行轮廓与显示质量，不把行列两点间接近当成直接偏好距离。',next_step='保留完整惯量和期望计数诊断，再做独立导览小样试验。',creator_id=admin.id));db.add(AuditLog(actor='seed',action='demo.created',detail={'total_counts':1806,'tables':3}));db.commit()
-  counts={t.__tablename__:db.scalar(select(func.count()).select_from(t)) for t in [User,ContingencyStudy,Category,CellCount,CorrespondenceRun,InterpretationNote]};print(json.dumps(counts));return counts
+  seed_interval(db)
+  counts={t.__tablename__:db.scalar(select(func.count()).select_from(t)) for t in [User,ContingencyStudy,Category,CellCount,CorrespondenceRun,InterpretationNote,IntervalStudy,IntervalCategory,IntervalCellBound,IntervalRun]};print(json.dumps(counts));return counts
+
+def seed_interval(db):
+ name='秋季导览内核定计数区间'
+ if db.scalar(select(IntervalStudy).where(IntervalStudy.name==name)):return
+ study=IntervalStudy(name=name,filename='hm-guide-interval-1.csv',description='尚未核清的格子只写上下限；行/列合计为已核实值。区间研究不改动原精确计数研究。')
+ db.add(study);db.flush()
+ row_labels=['家庭同行','学习小组','独立参访','策展同业'];col_labels=['故事导览','材料触摸','开放讨论','地图路径','静观笔记']
+ row_totals=[225,225,225,225];col_totals=[216,225,201,159,99]
+ lower=[[112,34,18,25,15],[22,106,32,23,18],[20,29,113,23,18],[39,37,23,67,36]]
+ upper=[[128,42,18,35,23],[32,118,40,31,28],[28,37,127,31,24],[51,47,31,83,36]]
+ groups={}
+ for axis,labels,totals in (('row',row_labels,row_totals),('column',col_labels,col_totals)):
+  group=[]
+  for i,(label,total) in enumerate(zip(labels,totals)):
+   category=IntervalCategory(study_id=study.id,axis=axis,code=('R' if axis=='row' else 'C')+str(i+1),label=label,position=i,verified_total=total)
+   db.add(category);db.flush();group.append(category)
+  groups[axis]=group
+ for i,r in enumerate(groups['row']):
+  for j,c in enumerate(groups['column']):
+   db.add(IntervalCellBound(study_id=study.id,row_id=r.id,column_id=c.id,lower=lower[i][j],upper=upper[i][j]))
+ db.commit()
+ if not db.scalar(select(IntervalRun).where(IntervalRun.study_id==study.id)):
+  result=solve_interval(lower,upper,row_totals,col_totals,time_limit=12,row_labels=[f'R{i+1} {x}' for i,x in enumerate(row_labels)],col_labels=[f'C{j+1} {x}' for j,x in enumerate(col_labels)])
+  result['study']={'id':study.id,'name':name,'filename':study.filename,'description':study.description}
+  result['row_categories']=[{'id':r.id,'code':r.code,'label':r.label,'verified_total':r.verified_total} for r in groups['row']]
+  result['column_categories']=[{'id':c.id,'code':c.code,'label':c.label,'verified_total':c.verified_total} for c in groups['column']]
+  admin=db.scalar(select(User).where(User.role=='admin'))
+  db.add(IntervalRun(study_id=study.id,name='区间惯量上下界初稿',time_limit=12,status='succeeded',result=result,creator_id=admin.id))
+  db.add(AuditLog(actor='seed',action='interval.demo.created',detail={'study_id':study.id,'status':result['status']}))
+  db.commit()
 if __name__=='__main__':seed()

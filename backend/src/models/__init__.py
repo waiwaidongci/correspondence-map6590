@@ -5,3 +5,4 @@ from .category import Category
 from .cell import CellCount
 from .run import CorrespondenceRun
 from .note import InterpretationNote
+from .interval import IntervalStudy,IntervalCategory,IntervalCellBound,IntervalRun
